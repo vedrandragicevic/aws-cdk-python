@@ -41,6 +41,20 @@ import uuid
 
 
 class PythonProjectStack(Stack):
+    """
+    # Initiate a class when using context from cdk.json
+
+    def __init__(self, scope: Construct, construct_id: str, context: SimpleNamespace, **kwargs) -> None:
+        super().__init__(scope, construct_id, **kwargs)
+
+
+        Example bucket creation:
+        ingestion_bucket = s3.Bucket(self, "DataIngestionBucket",
+                                    bucket_name=f"{context.environment}-data-ingestion",
+                                    encryption=s3.BucketEncryption.S3_MANAGED,
+                                    removal_policy=RemovalPolicy.DESTROY
+                                    )
+    """
 
     def __init__(self, scope: Construct, construct_id: str) -> None:
         super().__init__(scope, construct_id)
@@ -89,6 +103,14 @@ class PythonProjectStack(Stack):
                                                      )
 
         # ===================================================================================
+        # =========================== SECRETS MANAGER =======================================
+        # ===================================================================================
+
+        sm_secret = aws_secretsmanager.Secret(self, "SecretSecretsManager",
+                                                     secret_name=f"{context.environment}-sm-credentials",
+                                                     description="Credentials test server")
+
+        # ===================================================================================
         # ================================= GLUE ============================================
         # ===================================================================================
 
@@ -104,9 +126,9 @@ class PythonProjectStack(Stack):
         # Define The Glue Policy For Data Ingestion
         data_ingest_glue_policy = aws_iam.ManagedPolicy(
             self,
-            "IntegrationGluePolicy",
+            "IceIntegrationGluePolicy",
             description="Used for Glue permissions to ingest data into data lake",
-            managed_policy_name=f"glue-policy",
+            managed_policy_name=f"{context.environment}-{context.appName}-glue-policy",
             statements=[
                 aws_iam.PolicyStatement(
                     sid="CloudWatchLogsAccess",
@@ -116,7 +138,8 @@ class PythonProjectStack(Stack):
                         "logs:PutLogEvents",
                         "logs:CreateLogStream",
                     ],
-                    resources=[f"{data_ingest_log_group.log_group_arn}:*"],
+                    resources=[f"{ice_data_ingest_log_group.log_group_arn}:*",
+                               f"{ice_adler_ftp_log_group.log_group_arn}:*"],
                 ),
                 aws_iam.PolicyStatement(
                     sid="DynamoDBTableAccess",
@@ -125,6 +148,7 @@ class PythonProjectStack(Stack):
                         "dynamodb:GetItem",
                         "dynamodb:PutItem",
                         "dynamodb:DeleteItem",
+                        "dynamodb:UpdateItem"
                     ],
                     resources=[
                         global_variables_table.table_arn,
@@ -140,6 +164,8 @@ class PythonProjectStack(Stack):
                         "s3:GetObjectVersion",
                         "s3:ListBucket",
                         "s3:PutObject",
+                        "s3:DeleteObject",
+                        "s3:DeleteObjectVersion",
                         "s3:PutObjectAcl",
                         "s3:ListBucketVersions",
                     ],
@@ -148,6 +174,21 @@ class PythonProjectStack(Stack):
                         data_ingestion_bucket.bucket_arn + "/*"
                     ],
                 ),
+                aws_iam.PolicyStatement(
+                    sid="SecretsManagerAccess",
+                    effect=aws_iam.Effect.ALLOW,
+                    actions=["secretsmanager:GetSecretValue"],
+                    resources=[
+                        sm_secret.secret_arn
+                    ],
+                ),
+
+                aws_iam.PolicyStatement(
+                    sid="SecretValueRetrieveAccess",
+                    effect=aws_iam.Effect.ALLOW,
+                    actions=["secretsmanager:GetSecretValue"],
+                    resources=["*"],
+                )
 
             ],
         )
@@ -166,7 +207,10 @@ class PythonProjectStack(Stack):
             ],
         )
 
-        # Glue Job Construct
+        sm_secret.grant_read(data_ingest_glue_role)
+        sm_secret.grant_write(data_ingest_glue_role)
+
+        # Python Shell Glue Job Construct
         ingestion_glue_job = glue_alpha.Job(
             self,
             "IngestionGlueJob",
@@ -188,7 +232,9 @@ class PythonProjectStack(Stack):
                 "--GLOBAL_VARIABLES_TABLE": global_variables_table.table_name,
                 "--CONTROL_JOB_TABLE": glue_control_job_table.table_name,
                 "--CONTROL_JOB_STEP_TABLE": glue_control_job_step_table.table_name,
-                "--additional-python-modules": "simpledbf",
+                # Parameter --extra-py-files references .whl files from where glue job will install extra dependencies
+                "--extra-py-files": f"s3://{glue_job_scripts_bucket.bucket_name}/lib/awswrangler-2.10.0-py3-none-any.whl, s3://{glue_job_scripts_bucket.bucket_name}/lib/simpledbf-0.2.6-py3-none-any.whl",
+                "--TempDir": f"s3://{glue_job_scripts_bucket.bucket_name}/temporary/"
             },
         )
 
@@ -251,6 +297,9 @@ class PythonProjectStack(Stack):
         # =========================== LAKE FORMATION ========================================
         # ===================================================================================
 
+        """
+            Lake Formation constructs defined are not working properly. Use boto3 deployment script for LF.
+        """
         # The AWS::LakeFormation::Resource represents the data ( buckets and folders)
         # that is being registered with AWS Lake Formation
 
@@ -306,3 +355,32 @@ class PythonProjectStack(Stack):
                                                                 )
                                                               )
                                                             )"""
+
+        # =========================== GLUE ORCHESTRATION ====================================
+        # Defining Glue workflow
+        glue_workflow = glue.CfnWorkflow(
+            self,
+            "IngestionGlueWorkflow",
+            name=f"{context.environment}-ingestion-wf",
+            max_concurrent_runs=1,
+            description="Data Ingestion WF"
+        )
+
+        # Defining Glue start trigger
+        start_trigger = glue.CfnTrigger(
+            self,
+            "StartWFGlueTrigger",
+            name=f"{context.environment}-tgg-rentalman-start",
+            actions=[
+                glue.CfnTrigger.ActionProperty(
+                    job_name=ingestion_glue_job.job_name,
+                    arguments={
+                        "--CONTROL_JOB": "test"
+                    }
+                )
+            ],
+            type="SCHEDULED",
+            workflow_name=glue_workflow.name,
+            schedule=f"cron(0 8 * * ? *)",  # Run at 08:00 UTC every day
+            start_on_creation=True,
+        )
