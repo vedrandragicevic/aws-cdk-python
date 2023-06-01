@@ -40,7 +40,7 @@ def get_cdk_env(app: App):
         stack_props = {
             "env": Environment(region=context['region'], account=context['accountNumber']),
             "stack_name": f"{context['environment']}-{context['appName']}-stack",
-            "description": "CDK stack used to instantiate infrastructure for Ironclad.",
+            "description": "CDK stack used to instantiate infrastructure for CDK Project.",
         }
 
         return context, stack_props

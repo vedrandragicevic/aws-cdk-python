@@ -384,3 +384,4 @@ class PythonProjectStack(Stack):
             schedule=f"cron(0 8 * * ? *)",  # Run at 08:00 UTC every day
             start_on_creation=True,
         )
+        start_trigger.add_dependency(glue_workflow)
