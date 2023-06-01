@@ -6,6 +6,7 @@ GITHUB EXAMPLES:
     https://github.com/aws-samples/aws-cdk-examples/tree/master/python
     https://github.com/aws-samples/aws-cdk-pipelines-datalake-etl
     https://github.com/aws-samples/aws-cdk-pipelines-datalake-infrastructure
+    https://github.com/aws-samples/cdk-glue-orchestrate-redshift/blob/main/redshift_benchmark/redshiftBenchmarkStack.py
 
 """
 
