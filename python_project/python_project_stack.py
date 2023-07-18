@@ -1,13 +1,5 @@
 """
-AWS GLUE: https://docs.aws.amazon.com/cdk/api/v1/python/aws_cdk.aws_glue/README.html
-LAKE FORMATION EXAMPLE: https://catalog.us-east-1.prod.workshops.aws/workshops/697be460-9224-4b82-99e2-5103b900ed4e/en-US/030-build/034-code-walkthrough
-GITHUB EXAMPLES:
-    https://github.com/aws-samples/aws-glue-cdk-cicd/tree/main
-    https://github.com/aws-samples/aws-cdk-examples/tree/master/python
-    https://github.com/aws-samples/aws-cdk-pipelines-datalake-etl
-    https://github.com/aws-samples/aws-cdk-pipelines-datalake-infrastructure
-    https://github.com/aws-samples/cdk-glue-orchestrate-redshift/blob/main/redshift_benchmark/redshiftBenchmarkStack.py
-
+LAMBDA - S3 UPLOAD TRIGGER - SNS - DYNAMODB - S3 BUCKET - LAMBDA LAYERS
 """
 
 import json
@@ -63,73 +55,102 @@ class PythonProjectStack(Stack):
         # Importing VPC
         # main_vpc = ec2.Vpc.from_lookup(self, "Vpc", vpc_id="12345")
 
-        # ===================================================================================
-        # ================================= S3 ==============================================
-        # ===================================================================================
+        # SNS TOPICS FOR SUCCESS AND FAILURE
+        sns_success_topic = aws_sns.Topic(
+            self,
+            id="SNSSuccessTopic",
+            topic_name=f"{context.environment}-file-uploads-success",
+        )
+
+        sns_failure_topic = aws_sns.Topic(
+            self,
+            id="SNSFailureTopic",
+            topic_name=f"{context.environment}-file-uploads-failure",
+        )
+
+        # CREATE REQUIRED SUCCESS SUBSCRIPTION FOR 'alarm_notification_emails' LIST IN cdk.json
+        for email in context.alarm_notification_emails:
+            sub_id = (
+                    email.rsplit("@", 1)[0]
+                    + "_"
+                    + email.rsplit("@", 1)[1].rsplit(".", 1)[0]
+            ).replace(".", "_")
+            sub_id = (
+                    "".join(word.title() for word in sub_id.split("_"))
+                    + context.sub_id_suffix_success
+            )
+
+            # One subscription per email address
+            subscription = aws_sns.Subscription(
+                self,
+                id=sub_id,
+                topic=sns_success_topic,
+                endpoint=email,
+                protocol=aws_sns.SubscriptionProtocol.EMAIL,
+            )
+
+        # CREATE REQUIRED FAILURE SUBSCRIPTION FOR 'alarm_notification_emails' LIST IN cdk.json
+        for email in context.alarm_notification_emails:
+            sub_id = (
+                    email.rsplit("@", 1)[0]
+                    + "_"
+                    + email.rsplit("@", 1)[1].rsplit(".", 1)[0]
+            ).replace(".", "_")
+            sub_id = (
+                    "".join(word.title() for word in sub_id.split("_"))
+                    + context.sub_id_suffix_failure
+            )
+
+            # One subscription per email address
+            subscription = aws_sns.Subscription(
+                self,
+                id=sub_id,
+                topic=sns_failure_topic,
+                endpoint=email,
+                protocol=aws_sns.SubscriptionProtocol.EMAIL,
+            )
 
         # S3 Bucket Construct
-        data_ingestion_bucket = s3.Bucket(self, "IngestionBucket",
-                                          bucket_name=f"data-ingestion-{str(uuid.uuid4()).replace('-', '')}",
+        s3_bucket = s3.Bucket(self, "S3Bucket",
+                                          bucket_name=f"{context.environment}-file-uploads",
                                           encryption=s3.BucketEncryption.S3_MANAGED,
                                           removal_policy=RemovalPolicy.DESTROY
                                           )
 
-        # ===================================================================================
-        # ================================= DYNAMODB ========================================
-        # ===================================================================================
+        # Glue Database Construct
+        file_uploads_glue_database = glue_alpha.Database(
+            self,
+            "GlueDB",
+            database_name=f"file_uploads",
+            location_uri=f"s3://{data_lake_bucket.bucket_name}/D1/subfolder/")
+        file_uploads_glue_database.apply_removal_policy(RemovalPolicy.DESTROY)
 
         # DynamoDB Table Construct
-        global_variables_table = dynamodb.Table(self, "GlobalVariablesTable",
-                                                partition_key=dynamodb.Attribute(
-                                                    name="name", type=dynamodb.AttributeType.STRING),
-                                                billing_mode=dynamodb.BillingMode.PROVISIONED,
-                                                table_name=f"global_variables",
-                                                removal_policy=RemovalPolicy.DESTROY
-                                                )
+        dynamo_table = dynamodb.Table(self, "DynamoDBConfigTable",
+                                              partition_key=dynamodb.Attribute(
+                                                  name="path", type=dynamodb.AttributeType.STRING),
+                                              billing_mode=dynamodb.BillingMode.PROVISIONED,
+                                              table_name=f"{context.environment}-dynamo-config",
+                                              removal_policy=RemovalPolicy.DESTROY
+                                              )
 
-        glue_control_job_table = dynamodb.Table(self, "GlueControlJobTable",
-                                                partition_key=dynamodb.Attribute(
-                                                    name="name", type=dynamodb.AttributeType.STRING),
-                                                billing_mode=dynamodb.BillingMode.PROVISIONED,
-                                                table_name=f"glue_control_job",
-                                                removal_policy=RemovalPolicy.DESTROY
-                                                )
-
-        glue_control_job_step_table = dynamodb.Table(self, "GlueControlJobStepTable",
-                                                     partition_key=dynamodb.Attribute(
-                                                         name="name", type=dynamodb.AttributeType.STRING),
-                                                     billing_mode=dynamodb.BillingMode.PROVISIONED,
-                                                     table_name=f"glue_control_job_step",
-                                                     removal_policy=RemovalPolicy.DESTROY
-                                                     )
-
-        # ===================================================================================
-        # =========================== SECRETS MANAGER =======================================
-        # ===================================================================================
-
-        sm_secret = aws_secretsmanager.Secret(self, "SecretSecretsManager",
-                                                     secret_name=f"{context.environment}-sm-credentials",
-                                                     description="Credentials test server")
-
-        # ===================================================================================
-        # ================================= GLUE ============================================
-        # ===================================================================================
-
-        # Defining Log Group For Glue Job
-        data_ingest_log_group = aws_logs.LogGroup(
+        # Lambda Layer AWS WRANGLER Construct
+        awswrangler_layer = aws_lambda.LayerVersion(
             self,
-            "DataIngestJobLogGroup",
-            log_group_name="aws-glue/jobs/data-ingest-job",
-            retention=aws_logs.RetentionDays.THREE_MONTHS,
-            removal_policy=RemovalPolicy.DESTROY,
+            "AWSWranglerLambdaLayer",
+            description="Lambda Layer containing AWS Wrangler library",
+            code=aws_lambda.Code.from_asset("apps/lambda_layers/awswrangler-layer-2.15.1-py3.9.zip"),
+            layer_version_name=f"{context.environment}-awswrangler-lambda-layer",
+            compatible_runtimes=[aws_lambda.Runtime.PYTHON_3_9],
+            compatible_architectures=[aws_lambda.Architecture.X86_64],
         )
 
-        # Define The Glue Policy For Data Ingestion
-        data_ingest_glue_policy = aws_iam.ManagedPolicy(
+        # Define the Lambda policy for the Lambda
+        inline_lambda_policy = aws_iam.ManagedPolicy(
             self,
-            "IceIntegrationGluePolicy",
-            description="Used for Glue permissions to ingest data into data lake",
-            managed_policy_name=f"{context.environment}-{context.appName}-glue-policy",
+            "LambdaInlinePolicy",
+            description="Used for Lambda permissions",
+            managed_policy_name=f"{context.environment}-lambda-policy",
             statements=[
                 aws_iam.PolicyStatement(
                     sid="CloudWatchLogsAccess",
@@ -139,250 +160,144 @@ class PythonProjectStack(Stack):
                         "logs:PutLogEvents",
                         "logs:CreateLogStream",
                     ],
-                    resources=[f"{ice_data_ingest_log_group.log_group_arn}:*",
-                               f"{ice_adler_ftp_log_group.log_group_arn}:*"],
-                ),
-                aws_iam.PolicyStatement(
-                    sid="DynamoDBTableAccess",
-                    effect=aws_iam.Effect.ALLOW,
-                    actions=[
-                        "dynamodb:GetItem",
-                        "dynamodb:PutItem",
-                        "dynamodb:DeleteItem",
-                        "dynamodb:UpdateItem"
-                    ],
                     resources=[
-                        global_variables_table.table_arn,
-                        glue_control_job_table.table_arn,
-                        glue_control_job_step_table.table_arn
+                        f"arn:aws:logs:{context.region}:{context.accountNumber}:log-group:/aws/lambda/*"
                     ],
                 ),
                 aws_iam.PolicyStatement(
-                    sid="S3AccessForGlueJob",
+                    sid="LambdaS3Access",
                     effect=aws_iam.Effect.ALLOW,
                     actions=[
                         "s3:GetObject",
                         "s3:GetObjectVersion",
                         "s3:ListBucket",
                         "s3:PutObject",
-                        "s3:DeleteObject",
-                        "s3:DeleteObjectVersion",
                         "s3:PutObjectAcl",
-                        "s3:ListBucketVersions",
+                        "s3:PutObjectTagging",
+                        "s3:GetObjectTagging",
+                        "s3:DeleteObject"
                     ],
                     resources=[
-                        data_ingestion_bucket.bucket_arn,
-                        data_ingestion_bucket.bucket_arn + "/*"
+                        s3_bucket.bucket_arn,
+                        s3_bucket.bucket_arn + "/*",
+                        data_lake_bucket.bucket_arn,
+                        data_lake_bucket.bucket_arn + "/*",
                     ],
                 ),
                 aws_iam.PolicyStatement(
-                    sid="SecretsManagerAccess",
+                    sid="LambdaDynamoDBTableAccess",
+                    effect=aws_iam.Effect.ALLOW,
+                    actions=[
+                        "dynamodb:GetItem",
+                        "dynamodb:PutItem",
+                        "dynamodb:UpdateItem"
+                    ],
+                    resources=[
+                        global_variables_table.table_arn,
+                        dynamo_table.table_arn
+                    ],
+                ),
+                aws_iam.PolicyStatement(
+                    sid="LambdaSNSAccess",
+                    effect=aws_iam.Effect.ALLOW,
+                    actions=[
+                        "sns:Publish",
+                        "sns:Subscribe",
+                        "sns:ListSubscriptionsByTopic"
+                    ],
+                    resources=[
+                        sns_success_topic.topic_arn,
+                        sns_failure_topic.topic_arn
+                    ],
+                ),
+                aws_iam.PolicyStatement(
+                    sid="LambdaGlueAccess",
+                    effect=aws_iam.Effect.ALLOW,
+                    actions=[
+                        "glue:*",
+                    ],
+                    resources=[
+                        "*"
+                    ],
+                ),
+                aws_iam.PolicyStatement(
+                    sid="LambdaDataAPIAccess",
+                    effect=aws_iam.Effect.ALLOW,
+                    actions=[
+                        "redshift-data:BatchExecuteStatement",
+                        "redshift-data:ExecuteStatement",
+                        "redshift-data:CancelStatement",
+                        "redshift-data:ListStatements",
+                        "redshift-data:GetStatementResult",
+                        "redshift-data:DescribeStatement",
+                        "redshift-data:ListDatabases",
+                        "redshift-data:ListSchemas",
+                        "redshift-data:ListTables",
+                        "redshift-data:DescribeTable"
+                    ],
+                    resources=[
+                        "*"
+                    ],
+                ),
+                aws_iam.PolicyStatement(
+                    sid="LambdaDataIAMAccess",
+                    effect=aws_iam.Effect.ALLOW,
+                    actions=[
+                        "iam:ListRoles",
+                        "iam:ListUsers",
+                        "iam:ListGroups",
+                        "iam:ListPolicies"
+                    ],
+                    resources=[
+                        "*"
+                    ],
+                ),
+                aws_iam.PolicyStatement(
+                    sid="LambdaSecretsManagerAccess",
                     effect=aws_iam.Effect.ALLOW,
                     actions=["secretsmanager:GetSecretValue"],
                     resources=[
-                        sm_secret.secret_arn
+                        f"{context.rs_secret_arn}",
+                        etl_user_secret.secret_arn
                     ],
                 ),
-
-                aws_iam.PolicyStatement(
-                    sid="SecretValueRetrieveAccess",
-                    effect=aws_iam.Effect.ALLOW,
-                    actions=["secretsmanager:GetSecretValue"],
-                    resources=["*"],
-                )
-
             ],
         )
 
-        # Define Glue Role For Data Ingestion
-        data_ingest_glue_role = aws_iam.Role(
+        # Define Lambda Role with inline policies attached
+        lambda_role = aws_iam.Role(
             self,
-            "IntegrationGlueRole",
-            role_name=f"glue-role",
-            assumed_by=aws_iam.ServicePrincipal("glue.amazonaws.com"),
+            "LambdaIAMRole",
+            role_name=f"{context.environment}-lambda-role",
+            assumed_by=aws_iam.ServicePrincipal("lambda.amazonaws.com"),
             managed_policies=[
                 aws_iam.ManagedPolicy.from_aws_managed_policy_name(
-                    "service-role/AWSGlueServiceRole"
+                    "service-role/AWSLambdaBasicExecutionRole"
                 ),
-                data_ingest_glue_policy,
+                inline_lambda_policy,
             ],
         )
 
-        sm_secret.grant_read(data_ingest_glue_role)
-        sm_secret.grant_write(data_ingest_glue_role)
-
-        # Python Shell Glue Job Construct
-        ingestion_glue_job = glue_alpha.Job(
+        # Lambda Construct
+        lambda_function = aws_lambda.Function(
             self,
-            "IngestionGlueJob",
-            job_name=f"ingest-flat-files",
-            executable=glue_alpha.JobExecutable.python_shell(
-                glue_version=glue_alpha.GlueVersion.V1_0,
-                python_version=glue_alpha.PythonVersion.THREE,
-                script=glue_alpha.Code.from_asset(f"glue_jobs/ingestion_glue_job.py"),
-            ),
-            description="Glue Job Used To Ingest Data Into Data Lake.",
-            continuous_logging=glue_alpha.ContinuousLoggingProps(
-                enabled=True, log_group=data_ingest_log_group
-            ),
-            enable_profiling_metrics=True,
-            role=data_ingest_glue_role,
-            max_retries=0,
-            default_arguments={
-                "--CONTROL_JOB": "update_value",
-                "--GLOBAL_VARIABLES_TABLE": global_variables_table.table_name,
-                "--CONTROL_JOB_TABLE": glue_control_job_table.table_name,
-                "--CONTROL_JOB_STEP_TABLE": glue_control_job_step_table.table_name,
-                # Parameter --extra-py-files references .whl files from where glue job will install extra dependencies
-                "--extra-py-files": f"s3://{glue_job_scripts_bucket.bucket_name}/lib/awswrangler-2.10.0-py3-none-any.whl, s3://{glue_job_scripts_bucket.bucket_name}/lib/simpledbf-0.2.6-py3-none-any.whl",
-                "--TempDir": f"s3://{glue_job_scripts_bucket.bucket_name}/temporary/"
+            "ConstructLambda",
+            role=lambda_role,
+            runtime=aws_lambda.Runtime.PYTHON_3_9,
+            handler="lambda_function.lambda_handler",
+            security_groups=[security_group],
+            environment={
+                "ENVIRONMENT_NAME": f"{context.environment}"
             },
+            code=aws_lambda.Code.from_asset("apps/lambda_functions"),
+            timeout=Duration.minutes(5),
+            function_name=f"{context.environment}-upload-trigger-lamda",
+            memory_size=512,
+            layers=[awswrangler_layer],
+            retry_attempts=0,
         )
 
-        ingestion_glue_job.apply_removal_policy(RemovalPolicy.DESTROY)
-        ingestion_glue_job.role.add_managed_policy(
-            aws_iam.ManagedPolicy.from_aws_managed_policy_name('AWSGlueConsoleFullAccess')
-        )
-
-        # ===================================================================================
-        # ================================= CRAWLER =========================================
-        # ===================================================================================
-
-        # Data Lake Setup
-        data_lake_bucket = s3.Bucket(self, "DataLakeBucket",
-                                     bucket_name=f"data-lake-{str(uuid.uuid4()).replace('-', '')}",
-                                     encryption=s3.BucketEncryption.S3_MANAGED,
-                                     removal_policy=RemovalPolicy.DESTROY
-                                     )
-
-        glue_database = glue_alpha.Database(self,
-                                            "GlueDatabaseLakeFormation",
-                                            database_name="dev-test-table",
-                                            location_uri=f"s3://{data_lake_bucket.bucket_name}/sub_folder")
-        glue_database.apply_removal_policy(RemovalPolicy.DESTROY)
-
-        #  create a glue crawler to build the data catalog
-        # Step 1 . create a role for AWS Glue
-        glue_crawler_role = aws_iam.Role(self, "glue_role_crawler",
-                                         assumed_by=aws_iam.ServicePrincipal('glue.amazonaws.com'),
-                                         managed_policies=[
-                                             aws_iam.ManagedPolicy.from_managed_policy_arn(self,
-                                                                                           'MyFitsCrawlerGlueRole',
-                                                                                           managed_policy_arn='arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole')]
-                                         )
-
-        # glue role needs "*" read/write
-        # otherwise crawler will not be able to create tables (and no error messages in crawler logs)
-        glue_crawler_role.add_to_policy(
-            aws_iam.PolicyStatement(actions=['s3:GetObject', 's3:PutObject', 'lakeformation:GetDataAccess'],
-                                    effect=aws_iam.Effect.ALLOW, resources=['*']))
-
-        # Glue Crawler Definition
-        s3_target = glue.CfnCrawler.S3TargetProperty(path=f"{data_ingestion_bucket.bucket_name}/subfolder1/subfolder2/")
-        glue_crawler = glue.CfnCrawler(self,
-                                       'GlueCrawlerDefinition',
-                                       description='GlueCrawlerDesc',
-                                       name='dev-lake-formation-crawler',
-                                       database_name=glue_database.database_name,
-                                       role=glue_crawler_role.role_arn,
-                                       targets=glue.CfnCrawler.TargetsProperty(s3_targets=[s3_target]),
-                                       # schedule={"scheduleExpression": "cron(0/15 * * * ? *)"}, RUN EVERY 15 MIN
-                                       )
-
-        glue_crawler.apply_removal_policy(RemovalPolicy.DESTROY)
-
-        # Tags
-        Tags.of(glue_crawler).add("Key", "Value")
-
-        # ===================================================================================
-        # =========================== LAKE FORMATION ========================================
-        # ===================================================================================
-
-        """
-            Lake Formation constructs defined are not working properly. Use boto3 deployment script for LF.
-        """
-        # The AWS::LakeFormation::Resource represents the data ( buckets and folders)
-        # that is being registered with AWS Lake Formation
-
-        lake_formation_resource = lakeformation.CfnResource(self, "LakeFormationResourceID",
-                                                            resource_arn=data_lake_bucket.bucket_arn,
-                                                            use_service_linked_role=False,
-                                                            # the properties below are optional
-                                                            # role_arn="roleArn",
-                                                            # with_federation=False
-                                                            )
-
-        # The AWS::LakeFormation::Permissions resource represents the permissions that a principal has
-        # on an AWS Glue Data Catalog resource (such as AWS Glue database or AWS Glue tables)
-        lakeformation.CfnPermissions(self, "MyDataLakeDatabasePermission",
-                                     data_lake_principal=lakeformation.CfnPermissions.DataLakePrincipalProperty(
-                                         data_lake_principal_identifier=glue_crawler_role.role_arn),
-                                     resource=lakeformation.CfnPermissions.ResourceProperty(
-                                         database_resource=lakeformation.CfnPermissions.DatabaseResourceProperty(
-                                             name=glue_database.database_name)),
-                                     permissions=["ALTER", "DROP", "CREATE_TABLE"],
-                                     )
-
-        location_permission = lakeformation.CfnPermissions(self, "MyFitsDatalakeLocationPermission",
-                                                           data_lake_principal=lakeformation.CfnPermissions.DataLakePrincipalProperty(
-                                                               data_lake_principal_identifier=glue_crawler_role.role_arn),
-                                                           resource=lakeformation.CfnPermissions.ResourceProperty(
-                                                               data_location_resource=lakeformation.CfnPermissions.DataLocationResourceProperty(
-                                                                   s3_resource=data_lake_bucket.bucket_arn)),
-                                                           permissions=["DATA_LOCATION_ACCESS"],
-                                                           )
-
-        # make sure the location resource is created first
-        location_permission.node.add_dependency(lake_formation_resource)
-
-        # The AWS::LakeFormation::Tag resource represents an LF-tag,
-        # which consists of a key and one or more possible values for the key
-
-        lf_tags = lakeformation.CfnTag(self, "MyCfnTag",
-                                      tag_key="LFtagKey",
-                                      tag_values=["LFtagValues"]
-                                      )
-        lf_tags.apply_removal_policy(RemovalPolicy.DESTROY)
-
-        # The AWS::LakeFormation::TagAssociation resource represents an assignment of an LF-tag
-        # to a Data Catalog resource (database, table, or column)
-        """cfn_tag_association = lakeformation.CfnTagAssociation(
-            self, "MyCfnTagAssociation", lf_tags=[lf_tags
-            ],
-            resource=lakeformation.CfnTagAssociation.ResourceProperty(
-                                                            database=lakeformation.CfnTagAssociation.DatabaseResourceProperty(
-                                                                # catalog_id="catalogId",
-                                                                name=glue_database.database_name
-                                                                )
-                                                              )
-                                                            )"""
-
-        # =========================== GLUE ORCHESTRATION ====================================
-        # Defining Glue workflow
-        glue_workflow = glue.CfnWorkflow(
-            self,
-            "IngestionGlueWorkflow",
-            name=f"{context.environment}-ingestion-wf",
-            max_concurrent_runs=1,
-            description="Data Ingestion WF"
-        )
-
-        # Defining Glue start trigger
-        start_trigger = glue.CfnTrigger(
-            self,
-            "StartWFGlueTrigger",
-            name=f"{context.environment}-tgg-rentalman-start",
-            actions=[
-                glue.CfnTrigger.ActionProperty(
-                    job_name=ingestion_glue_job.job_name,
-                    arguments={
-                        "--CONTROL_JOB": "test"
-                    }
-                )
-            ],
-            type="SCHEDULED",
-            workflow_name=glue_workflow.name,
-            schedule=f"cron(0 8 * * ? *)",  # Run at 08:00 UTC every day
-            start_on_creation=True,
-        )
-        start_trigger.add_dependency(glue_workflow)
+        # S3 Upload Trigger For Lambda Function when file is uploaded under "inbound/" prefix
+        s3_bucket.add_event_notification(s3.EventType.OBJECT_CREATED,
+                                                     aws_s3_notifications.LambdaDestination(lambda_function),
+                                                     s3.NotificationKeyFilter(prefix="inbound/"))
