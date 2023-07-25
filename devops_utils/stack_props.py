@@ -8,42 +8,42 @@ logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
 
-def get_cdk_env(app: App):
+def _get_context(app: App) -> SimpleNamespace:
     """Get the CDK Context from cdk.json file, parses it and gets only specific environment
     dictionary from list of environments
     :param: app - CDK App object
     :return: context - Dictionary with Global and specific environment params
     """
     try:
+        # Get the current GIT branch from CDK Context when synthing the stack
         current_branch = app.node.try_get_context("currentBranch")
         logger.info(f"Current git branch: {current_branch}")
-        print(f"Current git branch: {current_branch}")
 
-        environments = app.node.try_get_context(current_branch)
-
-        if environments["branchName"] == current_branch:
-            environment = environments
+        # Iterate over all env's (dev, valid, prod)
+        environments = app.node.try_get_context("environments")
+        for env in environments:
+            # Use only parameters for the current GIT branch
+            if env["branchName"] == current_branch:
+                environment = env
         logger.info(json.dumps(environment, indent=2))
-        print(f"Json.dumps")
-        print(json.dumps(environment, indent=2))
 
         # Get Globals params
         global_params = app.node.try_get_context("globals")
         logger.info(f"Globals: ")
-        print(f"Globals: ")
-        print(json.dumps(global_params, indent=2))
         logger.info(json.dumps(global_params, indent=2))
-        context = {**global_params, **environment}
-        print(f"Context: ")
-        print({**global_params, **environment})
+        total_params = {**global_params, **environment}
 
-        stack_props = {
-            "env": Environment(region=context['region'], account=context['accountNumber']),
-            "stack_name": f"{context['environment']}-{context['appName']}-stack",
-            "description": "CDK stack used to instantiate infrastructure for CDK Project.",
-        }
-
-        return context, stack_props
+        return SimpleNamespace(**total_params)
 
     except BaseException as error:
         logger.error(repr(error))
+
+
+def get_stack_props(app: App) -> SimpleNamespace:
+    """Get Context to be used in app.py when creating CDK Stack
+    :param: app - CDK App object
+    :return: context
+    """
+    # Get context based on cdk.json
+    context = _get_context(app=app)
+    return context

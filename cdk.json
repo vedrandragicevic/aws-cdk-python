@@ -48,32 +48,15 @@
     "@aws-cdk/aws-ec2:restrictDefaultSecurityGroup": true,
     "@aws-cdk/aws-apigateway:requestValidatorUniqueId": true,
     "globals": {
-      "appName": "CF-APP-NAME",
+      "appName": "aws-cdk-app-vex",
       "region": "us-east-1"
     },
-    "dev":
+    "environments": [
       {
         "environment": "dev",
         "branchName": "dev",
-        "accountNumber": "XXX",
-        "vpc_id": "vpc-123",
-        "subnet1": "subnet-01",
-        "subnet2": "subnet-02",
-        "subnet3": "subnet-03",
-        "subnet4": "subnet-04",
-        "rentalManSchedule": "cron(0 8 * * ? *)"
-    },
-    "prod":
-    {
-        "environment": "prod",
-        "branchName": "prod",
-        "accountNumber": "XXX",
-        "vpc_id": "vpc-123",
-        "subnet1": "subnet-01",
-        "subnet2": "subnet-02",
-        "subnet3": "subnet-03",
-        "subnet4": "subnet-04",
-        "rentalManSchedule": "cron(0 8 * * ? *)"
+        "accountNumber": "12345"
     }
+    ]
   }
 }

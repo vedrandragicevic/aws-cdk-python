@@ -1,83 +1,14 @@
 
-# PYTHON CDK PROJECT!
+# Sample AWS CDK project!
 
-This is a project for CDK development with Python.
+Project contains AWS CDK app with multiple stacks.
 
-The `cdk.json` file tells the CDK Toolkit how to execute your app which also serves as a configuration context.
-
-This project is set up like a standard Python project.  The initialization
-process also creates a virtualenv within this project, stored under the `.venv`
-directory.  To create the virtualenv it assumes that there is a `python3`
-(or `python` for Windows) executable in your path with access to the `venv`
-package. If for any reason the automatic creation of the virtualenv fails,
-you can create the virtualenv manually.
-
-Configure the AWS CLI to authenticate using this command:
-
-```
-$ aws configure sso
-```
+The `cdk.json` file serves as a context for your app.
 
 
-To manually create a virtualenv on MacOS and Linux:
+## CDK commands
 
-```
-$ python -m venv .venv
-```
-
-After the init process completes and the virtualenv is created, you can use the following
-step to activate your virtualenv.
-
-```
-$ source .venv/bin/activate
-```
-
-If you are a Windows platform, you would activate the virtualenv like this:
-
-```
-% .venv\Scripts\activate.bat
-```
-
-Once the virtualenv is activated, you can install the required dependencies.
-
-```
-$ pip install -r requirements.txt
-```
-
-At this point you can now synthesize the CloudFormation template for this code.
-Always use branch from cdk.json (probably dev or prod)
-```
-$ cdk synth -c currentBranch=<branch> --profile <aws_profile_name>
-```
-
-Or run this command:
-
-```
-$ cdk synth -c currentBranch=<branch>
-```
-To run a manual deploy run this command:
-
-```
-$ cdk deploy -c currentBranch=<branch> --profile <aws_profile_name> --require-approval never
-```
-
-Or run this command:
-
-```
-$ cdk deploy -c currentBranch=<branch> --require-approval never
-```
-
-To delete all stacks run this command:
-
-```
-$ cdk destroy -c currentBranch=<branch> --profile <aws_profile_name>
-```
-
-## Useful commands
-
- * `cdk ls`          list all stacks in the app
- * `cdk synth`       emits the synthesized CloudFormation template
- * `cdk deploy`      deploy this stack to your default AWS account/region
- * `cdk diff`        compare deployed stack with current state
- * `cdk docs`        open CDK documentation
-
+ * `cdk ls -c currentBranch=dev `          list all stacks in the app
+ * `cdk synth -all -c currentBranch=dev `       emits the synthesized CloudFormation template for all stacks
+ * `cdk deploy -c currentBranch=dev --all --require-approval never`      deploy all stacks to AWS account/region defined in cdk.json
+ * `cdk destroy --all -c currentBranch=dev `        removes CDK stacks and resources
