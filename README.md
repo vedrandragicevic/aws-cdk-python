@@ -1,7 +1,7 @@
 
 # Sample AWS CDK project!
 
-Project contains AWS CDK app with multiple stacks.
+Project contains AWS CDK app with multiple stacks including CI/CD setup.
 
 The `cdk.json` file serves as a context for your app.
 
